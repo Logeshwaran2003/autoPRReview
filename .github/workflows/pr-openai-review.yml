@@ -1,48 +1,56 @@
-name: PR Review with Gemini
+name: PR AI Code Review
 
 on:
   pull_request:
-    types: [opened]
-
-permissions:
-  pull-requests: write  # ✅ Allow GitHub Actions to comment on PRs
+    types: [opened, synchronize]
 
 jobs:
-  gemini_review:
+  review_code:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v3
-      - name: Call Gemini API
-        id: gemini_request
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: pip install requests
+
+      - name: Extract PR Code
         run: |
-         RESPONSE_JSON=$(curl -s -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${{ secrets.GEMINI_API_KEY }}" \
-         -H "Content-Type: application/json" \
-         -d '{
-           "contents": [
-            {
-          "role": "user",
-          "parts": [
-            {
-              "text": "Review the following GitHub pull request and provide feedback:\n\nRepository: ${{ github.repository }}\nPR Title: ${{ github.event.pull_request.title }}\nPR Description: ${{ github.event.pull_request.body }}\nChanged Files:\n$(git diff --name-only HEAD^ HEAD)\n\nProvide a concise review with improvements and possible issues."
-            }
-          ]
-          }
-         ]
-         }')
+          echo "Fetching PR code..."
+          PR_FILES=$(gh pr diff --name-only ${{ github.event.pull_request.number }})
+          echo "$PR_FILES" > changed_files.txt
 
-         echo "Full API Response: $RESPONSE_JSON"
+      - name: Analyze Code with AI
+        run: |
+          echo "Reviewing code with AI..."
+          python - <<EOF
+          import requests
+          import os
 
-         RESPONSE=$(echo "$RESPONSE_JSON" | jq -r '.candidates[0].content.parts[0].text')
+          API_URL = "https://api-inference.huggingface.co/models/facebook/bart-large-cnn"
+          HEADERS = {"Authorization": f"Bearer {os.getenv('HUGGINGFACE_API_KEY')}"}
 
-         echo "Extracted Gemini Response: $RESPONSE"
+          with open("changed_files.txt", "r") as file:
+              code_changes = file.read()
 
-         echo "GEMINI_RESPONSE=$RESPONSE" >> $GITHUB_ENV
+          payload = {"inputs": f"Analyze this code and suggest optimization:\n{code_changes}"}
+          response = requests.post(API_URL, headers=HEADERS, json=payload)
 
-      - name: Comment on PR
-        uses: thollander/actions-comment-pull-request@v2
-        with:
-          message: "🤖 **Gemini AI Review:**\n\n${{ env.GEMINI_RESPONSE }}"
-          pr_number: ${{ github.event.pull_request.number }}
+          if response.status_code == 200:
+              ai_suggestion = response.json()[0]["summary_text"]
+          else:
+              ai_suggestion = "AI analysis failed."
+
+          print("AI Suggestion:", ai_suggestion)
+
+          with open("comment.txt", "w") as f:
+              f.write(f"**AI Code Review:**\n{ai_suggestion}")
+          EOF
+
+      - name: Post AI Comment on PR
+        env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          COMMENT=$(cat comment.txt)
+          gh pr comment ${{ github.event.pull_request.number }} --body "$COMMENT"
