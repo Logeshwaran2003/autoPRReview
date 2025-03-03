@@ -21,48 +21,54 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gh jq
 
-      - name: Fetch Changed Code
+      - name: Fetch Changed Files
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Fetching PR changes..."
-          gh pr diff ${{ github.event.pull_request.number }} > pr_changes.txt || echo "Error fetching diff"
+          echo "Fetching changed file names..."
+          gh pr diff ${{ github.event.pull_request.number }} --name-only > changed_files.txt
 
-          # Ensure we don't exceed API limits
-          head -c 2000 pr_changes.txt > truncated_changes.txt  # Adjust size as needed
+          if [[ ! -s changed_files.txt ]]; then
+            echo "No changed files detected. Skipping AI review." > comment.txt
+            exit 0
+          fi
 
-          # If the file is empty, skip AI review
+      - name: Generate Limited PR Diff
+        run: |
+          echo "Generating PR diff (only modified lines)..."
+          > truncated_changes.txt
+
+          while IFS= read -r file; do
+            echo "Processing $file..."
+            echo "### File: $file" >> truncated_changes.txt
+            gh pr diff ${{ github.event.pull_request.number }} -- "$file" --unified=0 | head -c 2000 >> truncated_changes.txt
+            echo "" >> truncated_changes.txt
+          done < changed_files.txt
+
           if [[ ! -s truncated_changes.txt ]]; then
             echo "No significant changes detected." > comment.txt
             exit 0
           fi
 
-      - name: Split Input into Smaller Chunks
-        run: |
-          # Split the truncated file into 512-character chunks (approx 512 tokens)
-          split -b 512 truncated_changes.txt chunk_
-          ls chunk_* > chunk_list.txt
-
-      - name: Get AI Review from Free API
+      - name: Send PR Diff to AI API in Chunks
         run: |
           echo "### AI Code Review:" > comment.txt
 
-          for file in $(cat chunk_list.txt); do
-            echo "Processing $file..."
-            
+          while IFS= read -r chunk; do
+            echo "Sending chunk to AI API..."
+
             API_RESPONSE=$(curl -s -X POST "https://api-inference.huggingface.co/models/microsoft/codebert-base" \
                 -H "Authorization: Bearer ${{ secrets.HUGGINGFACE_API_KEY }}" \
                 -H "Content-Type: application/json" \
-                -d "{\"inputs\": $(jq -Rs . < $file)}")
+                -d "{\"inputs\": $(jq -Rs . <<< "$chunk")}")
 
-            # Handle AI errors
             if [[ -z "$API_RESPONSE" || "$API_RESPONSE" == "null" || "$API_RESPONSE" == *"error"* ]]; then
-                echo "⚠️ AI analysis failed for $file." >> comment.txt
+                echo "⚠️ AI analysis failed for this chunk." >> comment.txt
             else
-                echo "#### Code Review for $file:" >> comment.txt
+                echo "#### Review:" >> comment.txt
                 echo "$API_RESPONSE" | jq -r . >> comment.txt
             fi
-          done
+          done < <(split -b 512 truncated_changes.txt --additional-suffix=.chunk && cat *.chunk)
 
       - name: Post AI Review as PR Comment
         env:
