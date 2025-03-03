@@ -19,7 +19,7 @@ jobs:
       - name: Install GitHub CLI
         run: |
           sudo apt-get update
-          sudo apt-get install -y gh
+          sudo apt-get install -y gh jq
 
       - name: Fetch Changed Code
         env:
@@ -28,37 +28,38 @@ jobs:
           echo "Fetching PR changes..."
           gh pr diff ${{ github.event.pull_request.number }} > pr_changes.txt || echo "Error fetching diff"
 
-          # Limit file size to prevent excessive input
-          head -c 2000 pr_changes.txt > truncated_changes.txt  # Adjust as needed
+          # Ensure we don't exceed API limits
+          head -c 2000 pr_changes.txt > truncated_changes.txt  # Adjust size as needed
 
-      - name: Split Input into Chunks
-        run: |
-          # Ensure truncated file is not empty
+          # If the file is empty, skip AI review
           if [[ ! -s truncated_changes.txt ]]; then
             echo "No significant changes detected." > comment.txt
             exit 0
           fi
 
-          # Split file into 512-token chunks
+      - name: Split Input into Smaller Chunks
+        run: |
+          # Split the truncated file into 512-character chunks (approx 512 tokens)
           split -b 512 truncated_changes.txt chunk_
           ls chunk_* > chunk_list.txt
 
       - name: Get AI Review from Free API
         run: |
           echo "### AI Code Review:" > comment.txt
-          
+
           for file in $(cat chunk_list.txt); do
-            echo "Sending chunk $file to AI API..."
+            echo "Processing $file..."
             
             API_RESPONSE=$(curl -s -X POST "https://api-inference.huggingface.co/models/microsoft/codebert-base" \
                 -H "Authorization: Bearer ${{ secrets.HUGGINGFACE_API_KEY }}" \
                 -H "Content-Type: application/json" \
-                -d "{\"inputs\": \"$(jq -Rs . < $file)\"}")
-            
+                -d "{\"inputs\": $(jq -Rs . < $file)}")
+
+            # Handle AI errors
             if [[ -z "$API_RESPONSE" || "$API_RESPONSE" == "null" || "$API_RESPONSE" == *"error"* ]]; then
                 echo "⚠️ AI analysis failed for $file." >> comment.txt
             else
-                echo "#### Chunk Review:" >> comment.txt
+                echo "#### Code Review for $file:" >> comment.txt
                 echo "$API_RESPONSE" | jq -r . >> comment.txt
             fi
           done
