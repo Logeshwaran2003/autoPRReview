@@ -5,57 +5,51 @@ on:
     types: [opened, synchronize]
 
 permissions:
-  pull-requests: write  # ✅ Grant permission to add comments
+  contents: read
+  pull-requests: write  # 👈 Allows commenting on PRs
 
 jobs:
-  review_code:
+  review:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-      - name: Install Dependencies
-        run: pip install requests
-
-      - name: Extract PR Code
-        env:
-         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install GitHub CLI
         run: |
-         echo "Fetching PR code..."
-           PR_FILES=$(gh pr diff --name-only ${{ github.event.pull_request.number }})
-           echo "$PR_FILES" > changed_files.txt
+          sudo apt-get update
+          sudo apt-get install -y gh
 
-      - name: Analyze Code with AI
-        run: |
-          echo "Reviewing code with AI..."
-          python - <<EOF
-          import requests
-          import os
-
-          API_URL = "https://api-inference.huggingface.co/models/facebook/bart-large-cnn"
-          HEADERS = {"Authorization": f"Bearer {os.getenv('HUGGINGFACE_API_KEY')}"}
-
-          with open("changed_files.txt", "r") as file:
-              code_changes = file.read()
-
-          payload = {"inputs": f"Analyze this code and suggest optimization:\n{code_changes}"}
-          response = requests.post(API_URL, headers=HEADERS, json=payload)
-
-          if response.status_code == 200:
-              ai_suggestion = response.json()[0]["summary_text"]
-          else:
-              ai_suggestion = "AI analysis failed."
-
-          print("AI Suggestion:", ai_suggestion)
-
-          with open("comment.txt", "w") as f:
-              f.write(f"**AI Code Review:**\n{ai_suggestion}")
-          EOF
-
-      - name: Post AI Comment on PR
+      - name: Fetch changed files
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Fetching PR code..."
+          PR_FILES=$(gh pr diff ${{ github.event.pull_request.number }} --name-only)
+          echo "$PR_FILES" > changed_files.txt
+
+      - name: Get AI Review from Free API
+        run: |
+          echo "Sending request to AI API..."
+
+          # Use Hugging Face CodeBERT or any free AI API
+          API_RESPONSE=$(curl -s -X POST "https://api-inference.huggingface.co/models/microsoft/codebert-base" \
+              -H "Authorization: Bearer ${{ secrets.HUGGINGFACE_API_KEY }}" \
+              -H "Content-Type: application/json" \
+              -d "{\"inputs\": \"$(cat changed_files.txt)\"}")
+
+          echo "AI API Response: $API_RESPONSE"
+
+          if [[ -z "$API_RESPONSE" || "$API_RESPONSE" == "null" ]]; then
+              echo "AI analysis failed." > comment.txt
+          else
+              echo "AI Code Review: $API_RESPONSE" > comment.txt
+          fi
+
+      - name: Post AI Review as PR Comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           COMMENT=$(cat comment.txt)
           gh pr comment ${{ github.event.pull_request.number }} --body "$COMMENT"
