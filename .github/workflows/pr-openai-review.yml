@@ -26,7 +26,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "Fetching PR code..."
-          PR_FILES=$(gh pr diff ${{ github.event.pull_request.number }} --name-only)
+          PR_FILES=$(gh pr diff ${{ github.event.pull_request.number }} > pr_changes.txt)
           echo "$PR_FILES" > changed_files.txt
 
       - name: Get AI Review from Free API
@@ -39,7 +39,7 @@ jobs:
               -H "Content-Type: application/json" \
               -d "{\"inputs\": \"$(cat changed_files.txt)\"}")
 
-          echo "AI API Response: $API_RESPONSE"
+          echo "AI Code Review: $API_RESPONSE" | jq -R > comment.txt
 
           if [[ -z "$API_RESPONSE" || "$API_RESPONSE" == "null" ]]; then
               echo "AI analysis failed." > comment.txt
