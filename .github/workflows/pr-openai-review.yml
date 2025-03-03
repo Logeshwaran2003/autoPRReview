@@ -1,40 +1,49 @@
-name: PR Review with OpenAI
+name: PR Review with Gemini
 
 on:
   pull_request:
     types: [opened]
 
 permissions:
-  pull-requests: write  # ✅ Grant permission to comment on PRs
+  pull-requests: write  # ✅ Allow GitHub Actions to comment on PRs
 
 jobs:
-  openai_review:
+  gemini_review:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
 
-      - name: Call OpenAI API
-        id: openai_request
+      - name: Call Gemini API
+        id: gemini_request
         run: |
-          RESPONSE=$(curl -s -X POST "https://api.openai.com/v1/chat/completions" \
+          RESPONSE_JSON=$(curl -s -X POST "https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key=${{ secrets.GEMINI_API_KEY }}" \
           -H "Content-Type: application/json" \
-          -H "Authorization: Bearer ${{ secrets.OPENAI_API_KEY }}" \
           -d '{
-            "model": "gpt-4-turbo",
-            "messages": [
-              {"role": "system", "content": "You are an AI assistant that reviews GitHub pull requests and provides concise feedback."},
-              {"role": "user", "content": "Review the following pull request:\nRepository: ${{ github.repository }}\nPR Title: ${{ github.event.pull_request.title }}\nPR Description: ${{ github.event.pull_request.body }}\nChanged Files:\n$(git diff --name-only HEAD^ HEAD)\n\nProvide a short review, highlighting improvements and possible issues."}
-            ],
-            "max_tokens": 300
-          }' | jq -r '.choices[0].message.content')
+            "contents": [
+              {
+                "role": "user",
+                "parts": [
+                  {
+                    "text": "Review the following GitHub pull request and provide feedback:\n\nRepository: ${{ github.repository }}\nPR Title: ${{ github.event.pull_request.title }}\nPR Description: ${{ github.event.pull_request.body }}\nChanged Files:\n$(git diff --name-only HEAD^ HEAD)\n\nProvide a concise review with improvements and possible issues."
+                  }
+                ]
+              }
+            ]
+          }')
 
-          echo "OPENAI_RESPONSE=$RESPONSE" >> $GITHUB_ENV
+          echo "Full API Response: $RESPONSE_JSON"
+
+          RESPONSE=$(echo "$RESPONSE_JSON" | jq -r '.candidates[0].content.parts[0].text')
+
+          echo "Extracted Gemini Response: $RESPONSE"
+
+          echo "GEMINI_RESPONSE=$RESPONSE" >> $GITHUB_ENV
 
       - name: Comment on PR
         uses: thollander/actions-comment-pull-request@v2
         with:
-          message: "🤖 **AI Review:**\n\n${{ env.OPENAI_RESPONSE }}"
+          message: "🤖 **Gemini AI Review:**\n\n${{ env.GEMINI_RESPONSE }}"
           pr_number: ${{ github.event.pull_request.number }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # ✅ Ensure GITHUB_TOKEN is passed
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
