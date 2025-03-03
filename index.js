@@ -5,7 +5,7 @@ function arrangeCircles(sheetWidth, sheetHeight, circleDiameter) {
     const totalCircles = circlesPerRow * circlesPerColumn;
 
     console.log(`Circles per row: ${circlesPerRow}`);
-    console.log(`Circles per column: ${circlesPerColumn}`);
+    console.log(`Circles per column: ${circlesPerColumn}`);//
     console.log(`Total circles: ${totalCircles}`);
     
     let positions = [];
