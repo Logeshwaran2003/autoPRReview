@@ -14,32 +14,31 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
-
       - name: Call Gemini API
         id: gemini_request
         run: |
-          RESPONSE_JSON=$(curl -s -X POST "https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key=AIzaSyAN6nttR6TA8hYWOxy6kekKhICcJE66s24" \
-          -H "Content-Type: application/json" \
-          -d '{
-            "contents": [
-              {
-                "role": "user",
-                "parts": [
-                  {
-                    "text": "Review the following GitHub pull request and provide feedback:\n\nRepository: ${{ github.repository }}\nPR Title: ${{ github.event.pull_request.title }}\nPR Description: ${{ github.event.pull_request.body }}\nChanged Files:\n$(git diff --name-only HEAD^ HEAD)\n\nProvide a concise review with improvements and possible issues."
-                  }
-                ]
-              }
-            ]
-          }')
+         RESPONSE_JSON=$(curl -s -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${{ secrets.GEMINI_API_KEY }}" \
+         -H "Content-Type: application/json" \
+         -d '{
+           "contents": [
+            {
+          "role": "user",
+          "parts": [
+            {
+              "text": "Review the following GitHub pull request and provide feedback:\n\nRepository: ${{ github.repository }}\nPR Title: ${{ github.event.pull_request.title }}\nPR Description: ${{ github.event.pull_request.body }}\nChanged Files:\n$(git diff --name-only HEAD^ HEAD)\n\nProvide a concise review with improvements and possible issues."
+            }
+          ]
+          }
+         ]
+         }')
 
-          echo "Full API Response: $RESPONSE_JSON"
+         echo "Full API Response: $RESPONSE_JSON"
 
-          RESPONSE=$(echo "$RESPONSE_JSON" | jq -r '.candidates[0].content.parts[0].text')
+         RESPONSE=$(echo "$RESPONSE_JSON" | jq -r '.candidates[0].content.parts[0].text')
 
-          echo "Extracted Gemini Response: $RESPONSE"
+         echo "Extracted Gemini Response: $RESPONSE"
 
-          echo "GEMINI_RESPONSE=$RESPONSE" >> $GITHUB_ENV
+         echo "GEMINI_RESPONSE=$RESPONSE" >> $GITHUB_ENV
 
       - name: Comment on PR
         uses: thollander/actions-comment-pull-request@v2
