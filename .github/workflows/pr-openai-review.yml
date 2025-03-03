@@ -18,7 +18,7 @@ jobs:
       - name: Call Gemini API
         id: gemini_request
         run: |
-          RESPONSE_JSON=$(curl -s -X POST "https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key=${{ secrets.GEMINI_API_KEY }}" \
+          RESPONSE_JSON=$(curl -s -X POST "https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key=AIzaSyAN6nttR6TA8hYWOxy6kekKhICcJE66s24" \
           -H "Content-Type: application/json" \
           -d '{
             "contents": [
