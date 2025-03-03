@@ -16,7 +16,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Install GitHub CLI
+      - name: Install GitHub CLI & jq
         run: |
           sudo apt-get update
           sudo apt-get install -y gh jq
@@ -25,7 +25,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Fetching changed file names..."
+          echo "Fetching changed files..."
           gh pr diff ${{ github.event.pull_request.number }} --name-only > changed_files.txt
 
           if [[ ! -s changed_files.txt ]]; then
@@ -33,7 +33,7 @@ jobs:
             exit 0
           fi
 
-      - name: Generate Limited PR Diff
+      - name: Generate PR Diff (Truncated)
         run: |
           echo "Generating PR diff (only modified lines)..."
           > truncated_changes.txt
@@ -54,21 +54,27 @@ jobs:
         run: |
           echo "### AI Code Review:" > comment.txt
 
-          while IFS= read -r chunk; do
+          split -b 512 truncated_changes.txt --additional-suffix=.chunk
+
+          for chunk in *.chunk; do
             echo "Sending chunk to AI API..."
+            
+            # Properly format JSON input
+            JSON_INPUT=$(jq -Rs '.' < "$chunk")
 
             API_RESPONSE=$(curl -s -X POST "https://api-inference.huggingface.co/models/microsoft/codebert-base" \
                 -H "Authorization: Bearer ${{ secrets.HUGGINGFACE_API_KEY }}" \
                 -H "Content-Type: application/json" \
-                -d "{\"inputs\": $(jq -Rs . <<< "$chunk")}")
+                -d "{\"inputs\": $JSON_INPUT}")
 
-            if [[ -z "$API_RESPONSE" || "$API_RESPONSE" == "null" || "$API_RESPONSE" == *"error"* ]]; then
+            # Check if the response contains an error
+            if echo "$API_RESPONSE" | jq -e 'has("error")' >/dev/null; then
                 echo "⚠️ AI analysis failed for this chunk." >> comment.txt
             else
                 echo "#### Review:" >> comment.txt
-                echo "$API_RESPONSE" | jq -r . >> comment.txt
+                echo "$API_RESPONSE" | jq -r '.' >> comment.txt
             fi
-          done < <(split -b 512 truncated_changes.txt --additional-suffix=.chunk && cat *.chunk)
+          done
 
       - name: Post AI Review as PR Comment
         env:
