@@ -1,0 +1,36 @@
+name: PR Review with OpenAI
+
+on:
+  pull_request:
+    types: [opened]
+
+jobs:
+  openai_review:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Call OpenAI API
+        id: openai_request
+        run: |
+          RESPONSE=$(curl -s -X POST "https://api.openai.com/v1/chat/completions" \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Bearer ${{ secrets.OPENAI_API_KEY }}" \
+          -d '{
+            "model": "gpt-4-turbo",
+            "messages": [
+              {"role": "system", "content": "You are an AI assistant that reviews GitHub pull requests and provides concise feedback."},
+              {"role": "user", "content": "Review the following pull request:\nRepository: ${{ github.repository }}\nPR Title: ${{ github.event.pull_request.title }}\nPR Description: ${{ github.event.pull_request.body }}\nChanged Files:\n$(git diff --name-only HEAD^ HEAD)\n\nProvide a short review, highlighting improvements and possible issues."}
+            ],
+            "max_tokens": 300
+          }' | jq -r '.choices[0].message.content')
+
+          echo "OPENAI_RESPONSE=$RESPONSE" >> $GITHUB_ENV
+
+      - name: Comment on PR
+        uses: thollander/actions-comment-pull-request@v2
+        with:
+          message: "🤖 **AI Review:**\n\n${{ env.OPENAI_RESPONSE }}"
+          pr_number: ${{ github.event.pull_request.number }}
