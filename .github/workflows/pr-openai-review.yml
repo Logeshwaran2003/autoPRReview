@@ -1,4 +1,4 @@
-name: PR AI Code Review
+\name: PR AI Code Review
 
 on:
   pull_request:
@@ -27,24 +27,35 @@ jobs:
         run: |
           echo "Fetching PR changes..."
           gh pr diff ${{ github.event.pull_request.number }} > pr_changes.txt
-          head -c 5000 pr_changes.txt > truncated_changes.txt # Limit input size
+          
+          # Truncate to avoid excessive input
+          head -c 2000 pr_changes.txt > truncated_changes.txt  # Adjust as needed
+
+      - name: Split Input into Chunks
+        run: |
+          # Split file into 512-token chunks
+          split -b 512 truncated_changes.txt chunk_
+          ls chunk_* > chunk_list.txt
 
       - name: Get AI Review from Free API
         run: |
-          echo "Sending request to AI API..."
-          API_RESPONSE=$(curl -s -X POST "https://api-inference.huggingface.co/models/microsoft/codebert-base" \
-              -H "Authorization: Bearer ${{ secrets.HUGGINGFACE_API_KEY }}" \
-              -H "Content-Type: application/json" \
-              -d "{\"inputs\": \"$(jq -Rs . < truncated_changes.txt)\"}")
-
-          echo "AI API Response: $API_RESPONSE"
-
-          if [[ -z "$API_RESPONSE" || "$API_RESPONSE" == "null" ]]; then
-              echo "AI analysis failed." > comment.txt
-          else
-              echo "### AI Code Review:" > comment.txt
-              echo "$API_RESPONSE" | jq -r . >> comment.txt
-          fi
+          echo "### AI Code Review:" > comment.txt
+          
+          for file in $(cat chunk_list.txt); do
+            echo "Sending chunk $file to AI API..."
+            
+            API_RESPONSE=$(curl -s -X POST "https://api-inference.huggingface.co/models/microsoft/codebert-base" \
+                -H "Authorization: Bearer ${{ secrets.HUGGINGFACE_API_KEY }}" \
+                -H "Content-Type: application/json" \
+                -d "{\"inputs\": \"$(jq -Rs . < $file)\"}")
+            
+            if [[ -z "$API_RESPONSE" || "$API_RESPONSE" == "null" || "$API_RESPONSE" == *"error"* ]]; then
+                echo "⚠️ AI analysis failed for $file." >> comment.txt
+            else
+                echo "#### Chunk Review:" >> comment.txt
+                echo "$API_RESPONSE" | jq -r . >> comment.txt
+            fi
+          done
 
       - name: Post AI Review as PR Comment
         env:
