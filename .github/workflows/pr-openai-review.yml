@@ -16,10 +16,12 @@ jobs:
         run: pip install requests
 
       - name: Extract PR Code
+        env:
+         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Fetching PR code..."
-          PR_FILES=$(gh pr diff --name-only ${{ github.event.pull_request.number }})
-          echo "$PR_FILES" > changed_files.txt
+         echo "Fetching PR code..."
+           PR_FILES=$(gh pr diff --name-only ${{ github.event.pull_request.number }})
+           echo "$PR_FILES" > changed_files.txt
 
       - name: Analyze Code with AI
         run: |
