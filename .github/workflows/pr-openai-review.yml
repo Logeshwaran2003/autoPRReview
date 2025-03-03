@@ -26,13 +26,19 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "Fetching PR changes..."
-          gh pr diff ${{ github.event.pull_request.number }} > pr_changes.txt
-          
-          # Truncate to avoid excessive input
+          gh pr diff ${{ github.event.pull_request.number }} > pr_changes.txt || echo "Error fetching diff"
+
+          # Limit file size to prevent excessive input
           head -c 2000 pr_changes.txt > truncated_changes.txt  # Adjust as needed
 
       - name: Split Input into Chunks
         run: |
+          # Ensure truncated file is not empty
+          if [[ ! -s truncated_changes.txt ]]; then
+            echo "No significant changes detected." > comment.txt
+            exit 0
+          fi
+
           # Split file into 512-token chunks
           split -b 512 truncated_changes.txt chunk_
           ls chunk_* > chunk_list.txt
