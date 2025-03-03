@@ -37,3 +37,4 @@ jobs:
         with:
           message: "🤖 **AI Review:**\n\n${{ env.OPENAI_RESPONSE }}"
           pr_number: ${{ github.event.pull_request.number }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # ✅ Ensure GITHUB_TOKEN is passed
