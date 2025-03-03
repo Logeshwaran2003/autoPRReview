@@ -1,4 +1,4 @@
-\function arrangeCircles(sheetWidth, sheetHeight, circleDiameter) {
+function arrangeCircles(sheetWidth, sheetHeight, circleDiameter) {
     let positions = [];
     let row = 0;
     let col = 0;
