@@ -6,7 +6,7 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write  # 👈 Allows commenting on PRs
+  pull-requests: write
 
 jobs:
   review:
@@ -21,30 +21,29 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gh
 
-      - name: Fetch changed files
+      - name: Fetch Changed Code
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Fetching PR code..."
-          PR_FILES=$(gh pr diff ${{ github.event.pull_request.number }} > pr_changes.txt)
-          echo "$PR_FILES" > changed_files.txt
+          echo "Fetching PR changes..."
+          gh pr diff ${{ github.event.pull_request.number }} > pr_changes.txt
+          head -c 5000 pr_changes.txt > truncated_changes.txt # Limit input size
 
       - name: Get AI Review from Free API
         run: |
           echo "Sending request to AI API..."
-
-          # Use Hugging Face CodeBERT or any free AI API
           API_RESPONSE=$(curl -s -X POST "https://api-inference.huggingface.co/models/microsoft/codebert-base" \
               -H "Authorization: Bearer ${{ secrets.HUGGINGFACE_API_KEY }}" \
               -H "Content-Type: application/json" \
-              -d "{\"inputs\": \"$(cat changed_files.txt)\"}")
+              -d "{\"inputs\": \"$(jq -Rs . < truncated_changes.txt)\"}")
 
-          echo "AI Code Review: $API_RESPONSE" | jq -R > comment.txt
+          echo "AI API Response: $API_RESPONSE"
 
           if [[ -z "$API_RESPONSE" || "$API_RESPONSE" == "null" ]]; then
               echo "AI analysis failed." > comment.txt
           else
-              echo "AI Code Review: $API_RESPONSE" > comment.txt
+              echo "### AI Code Review:" > comment.txt
+              echo "$API_RESPONSE" | jq -r . >> comment.txt
           fi
 
       - name: Post AI Review as PR Comment
