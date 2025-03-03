@@ -7,7 +7,7 @@ function arrangeCircles(sheetWidth, sheetHeight, circleDiameter) {
     while (row * circleDiameter < sheetHeight) {
         col = 0;
         while (col * circleDiameter < sheetWidth) {
-            let x = col * circleDiameter + circleDiameter / 2;/
+            let x = col * circleDiameter + circleDiameter / 2;//
             let y = row * circleDiameter + circleDiameter / 2;//
             
             positions.push({ x: x, y: y });
