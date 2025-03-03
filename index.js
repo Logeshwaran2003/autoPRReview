@@ -1,22 +1,26 @@
-function arrangeCircles(sheetWidth, sheetHeight, circleDiameter) {
-    const cricPerrow = sheetWidth / circleDiameter
-    const circlesPerRow = Math.floor(cricPerrow);
-    const circlesPerColumn = Math.floor(sheetHeight / circleDiameter);
-    const totalCircles = circlesPerRow * circlesPerColumn;
-
-    console.log(`Circles per row: ${circlesPerRow}`);
-    console.log(`Circles per column: ${circlesPerColumn}`);
+\function arrangeCircles(sheetWidth, sheetHeight, circleDiameter) {
+    let positions = [];
+    let row = 0;
+    let col = 0;
+    let totalCircles = 0;
+    
+    while (row * circleDiameter < sheetHeight) {
+        col = 0;
+        while (col * circleDiameter < sheetWidth) {
+            let x = col * circleDiameter + circleDiameter / 2;
+            let y = row * circleDiameter + circleDiameter / 2;
+            
+            positions.push({ x: x, y: y });
+            totalCircles++;
+            col++;
+        }
+        row++;
+    }
+    
+    console.log(`Circles per row: ${col}`);
+    console.log(`Circles per column: ${row}`);
     console.log(`Total circles: ${totalCircles}`);
     
-    let positions = [];
-    for (let row = 0; row < circlesPerColumn; row++) {
-        for (let col = 0; col < circlesPerRow; col++) {
-            positions.push({
-                x: col * circleDiameter + circleDiameter / 2,
-                y: row * circleDiameter + circleDiameter / 2
-            });
-        }
-    }
     return positions;
 }
 
