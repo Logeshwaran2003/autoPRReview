@@ -19,17 +19,46 @@ jobs:
       - name: Install GitHub CLI
         run: |
           sudo apt-get update
-          sudo apt-get install -y gh
+          sudo apt-get install -y gh jq
 
-      - name: Fetch changed files
+      - name: Fetch PR Details
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Fetching PR code..."
-          PR_FILES=$(gh pr diff ${{ github.event.pull_request.number }} --name-only)
-          echo "$PR_FILES" > changed_files.txt
+          PR_TITLE=$(gh pr view ${{ github.event.pull_request.number }} --json title -q .title)
+          PR_BODY=$(gh pr view ${{ github.event.pull_request.number }} --json body -q .body)
+          CHANGED_FILES=$(gh pr diff ${{ github.event.pull_request.number }} --name-only)
 
-      - name: Get AI Review from Free API
+          echo "PR_TITLE=$PR_TITLE" >> $GITHUB_ENV
+          echo "PR_BODY=$PR_BODY" >> $GITHUB_ENV
+          echo "$CHANGED_FILES" > changed_files.txt
+
+      - name: Prepare AI Review Prompt
+        run: |
+          echo "Generating AI review prompt..."
+
+          PROMPT=$(cat <<EOF
+          A new file was modified in a PR titled "${{ env.PR_TITLE }}".
+          PR description: ${{ env.PR_BODY }}
+
+          Please review the following changed files for correctness, optimizations, and best practices:
+
+          ```
+          $(cat changed_files.txt)
+          ```
+
+          Provide specific feedback on:
+          1. Code quality and design
+          2. Potential bugs or edge cases
+          3. Performance optimizations
+          4. Any security concerns
+          5. Overall approach and suggestions for improvement
+          EOF
+          )
+
+          echo "$PROMPT" > prompt.txt
+
+      - name: Get AI Review from Gemini 2.0
         run: |
           echo "Sending request to AI API..."
 
@@ -37,16 +66,16 @@ jobs:
              -H "Content-Type: application/json" \
              -d '{
              "contents": [{
-                 "parts": [{"text": "'"$(cat changed_files.txt)"'"}]
+                 "parts": [{"text": "'"$(cat prompt.txt)"'"}]
              }]
-          }')
+          }' | jq -r '.candidates[0].content.parts[0].text')
 
           echo "AI API Response: $API_RESPONSE"
 
           if [[ -z "$API_RESPONSE" || "$API_RESPONSE" == "null" ]]; then
               echo "AI analysis failed." > comment.txt
           else
-              echo "AI Code Review: $API_RESPONSE" > comment.txt
+              echo "### AI Code Review:\n\n$API_RESPONSE" > comment.txt
           fi
 
       - name: Post AI Review as PR Comment
@@ -55,4 +84,3 @@ jobs:
         run: |
           COMMENT=$(cat comment.txt)
           gh pr comment ${{ github.event.pull_request.number }} --body "$COMMENT"
-
