@@ -30,11 +30,13 @@ jobs:
       - name: Get file differences
         id: file_changes
         run: |
-          BASE_SHA=${{ github.event.pull_request.base.sha }}
-          HEAD_SHA=${{ github.event.pull_request.head.sha }}
-          echo "Getting diff between $BASE_SHA and $HEAD_SHA"
-          git diff --name-only $BASE_SHA $HEAD_SHA > changed_files.txt
+          echo "Fetching changed files..."
+          git fetch origin
+          git diff --name-only origin/${{ github.event.pull_request.base.ref }} > changed_files.txt
           
+      - name: Debug changed files
+        run: cat changed_files.txt
+        
       - name: Generate and post reviews
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -69,18 +71,20 @@ jobs:
           # For each changed file
           for file_path in changed_files:
               try:
-                  # Skip binary files, non-code files, etc.
-                  if not os.path.exists(file_path) or os.path.isdir(file_path):
-                      continue
-                      
+                  print(f"Processing {file_path}...")
+
+                  # Skip non-code files
                   file_extension = os.path.splitext(file_path)[1].lower()
-                  if file_extension not in ['.py', '.js', '.jsx', '.ts', '.tsx', '.java', '.c', '.cpp', '.h', '.go', '.rb', '.php', '.html', '.css', '.yml', '.yaml', '.json', '.md', '.rs', '.swift']:
+                  allowed_extensions = ['.py', '.js', '.jsx', '.ts', '.tsx', '.java', '.c', '.cpp', '.h', '.go', '.rb', '.php', '.html', '.css', '.yml', '.yaml', '.json', '.md', '.rs', '.swift']
+                  if file_extension not in allowed_extensions:
+                      print(f"Skipping {file_path} (not a code file).")
                       continue
                   
                   # Get file diff
-                  diff_output = os.popen(f"git diff ${{{{ github.event.pull_request.base.sha }}}} ${{{{ github.event.pull_request.head.sha }}}} -- {file_path}").read()
+                  diff_output = os.popen(f"git diff origin/${{ github.event.pull_request.base.ref }} -- {file_path}").read().strip()
                   
                   if not diff_output:
+                      print(f"No diff found for {file_path}, skipping...")
                       continue
                   
                   # Get the file content
@@ -99,82 +103,61 @@ jobs:
                   2. Performance improvements
                   3. Security concerns
                   4. Code style and best practices
-                  
-                  For context, here is the full file content:
-                  ```
-                  {file_content}
-                  ```
-                  
-                  Here is the diff showing what changed:
-                  ```
-                  {diff_output}
-                  ```
-                  
-                  Provide a concise, specific, and constructive review. Focus only on the changes in the diff, not the entire file.
-                  Format your response as JSON with these fields:
-                  - overall_assessment: A brief summary of the changes
-                  - suggestions: Array of objects with line_number and comment fields
-                  
-                  Example:
+
+                  Only provide a structured JSON response in this format:
                   {{
-                      "overall_assessment": "Good implementation of feature X, but there are some concerns.",
+                      "overall_assessment": "Summary here",
                       "suggestions": [
-                          {{
-                              "line_number": 42,
-                              "comment": "Consider using a more efficient algorithm here."
-                          }}
+                          {{"line_number": 42, "comment": "Consider using a more efficient algorithm here."}}
                       ]
                   }}
+
+                  ### Full File Content:
+                  ```
+                  {file_content[:10000]}
+                  ```
+
+                  ### Code Diff:
+                  ```
+                  {diff_output[:5000]}
+                  ```
                   """
                   
                   response = model.generate_content(prompt)
-                  review_text = response.text
-                  
-                  # Try to parse the response as JSON
+                  review_text = response.text.strip()
+
+                  print(f"Gemini API Response: {review_text[:500]}")  # Debug first 500 chars
+
+                  # Try parsing JSON response
                   try:
-                      json_start = review_text.find('{')
-                      json_end = review_text.rfind('}') + 1
-                      if json_start >= 0 and json_end > json_start:
-                          json_str = review_text[json_start:json_end]
-                          review_data = json.loads(json_str)
-                          
-                          # Post overall assessment as a PR comment
-                          if "overall_assessment" in review_data:
-                              pr_comment_url = f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments"
-                              comment_data = {
-                                  "body": f"## Gemini Review for `{file_path}`\n\n{review_data['overall_assessment']}"
-                              }
-                              requests.post(pr_comment_url, headers=headers, json=comment_data)
-                          
-                          # Post line-specific comments
-                          if "suggestions" in review_data and len(review_data["suggestions"]) > 0:
-                              # Get the commit SHA to attach comments to
-                              commit_sha = os.environ['GITHUB_SHA']
-                              
-                              for suggestion in review_data["suggestions"]:
-                                  line_number = suggestion.get("line_number")
-                                  comment = suggestion.get("comment")
-                                  
-                                  if line_number and comment:
-                                      # Create a line comment
-                                      comment_data = {
-                                          "body": comment,
-                                          "commit_id": os.environ['GITHUB_SHA'],
-                                          "path": file_path,
-                                          "line": line_number,
-                                          "side": "RIGHT"  # Comment on the new version
-                                      }
-                                      requests.post(github_api_url, headers=headers, json=comment_data)
-                      else:
-                          # Fall back to posting the entire response as a comment
-                          comment_data = {
-                              "body": f"## Gemini Review for `{file_path}`\n\n{review_text}"
-                          }
+                      review_data = json.loads(review_text)
+
+                      # Post overall assessment as a PR comment
+                      if "overall_assessment" in review_data:
                           pr_comment_url = f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments"
+                          comment_data = {
+                              "body": f"## Gemini Review for `{file_path}`\n\n{review_data['overall_assessment']}"
+                          }
                           requests.post(pr_comment_url, headers=headers, json=comment_data)
-                              
+
+                      # Post line-specific comments
+                      if "suggestions" in review_data and isinstance(review_data["suggestions"], list):
+                          for suggestion in review_data["suggestions"]:
+                              line_number = suggestion.get("line_number")
+                              comment = suggestion.get("comment")
+
+                              if line_number and comment:
+                                  comment_data = {
+                                      "body": comment,
+                                      "commit_id": os.environ['GITHUB_SHA'],
+                                      "path": file_path,
+                                      "line": line_number,
+                                      "side": "RIGHT"
+                                  }
+                                  requests.post(github_api_url, headers=headers, json=comment_data)
+
                   except json.JSONDecodeError:
-                      # If not valid JSON, post the raw text as a comment
+                      print(f"Error parsing Gemini response for {file_path}. Posting raw response.")
                       comment_data = {
                           "body": f"## Gemini Review for `{file_path}`\n\n{review_text}"
                       }
