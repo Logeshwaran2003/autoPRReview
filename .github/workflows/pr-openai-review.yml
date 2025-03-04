@@ -6,7 +6,7 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
+  pull-requests: write  # 👈 Allows commenting on PRs
 
 jobs:
   review:
@@ -16,69 +16,43 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Install GitHub CLI & jq
+      - name: Install GitHub CLI
         run: |
           sudo apt-get update
-          sudo apt-get install -y gh jq
+          sudo apt-get install -y gh
 
-      - name: Fetch Changed Files
+      - name: Fetch changed files
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Fetching changed files..."
-          gh pr diff ${{ github.event.pull_request.number }} --name-only > changed_files.txt
+          echo "Fetching PR code..."
+          PR_FILES=$(gh pr diff ${{ github.event.pull_request.number }} --name-only)
+          echo "$PR_FILES" > changed_files.txt
 
-          if [[ ! -s changed_files.txt ]]; then
-            echo "No changed files detected. Skipping AI review." > comment.txt
-            exit 0
-          fi
-
-      - name: Generate PR Diff (Truncated)
+      - name: Get AI Review from Free API
         run: |
-          echo "Generating PR diff (only modified lines)..."
-          > truncated_changes.txt
+          echo "Sending request to AI API..."
 
-          while IFS= read -r file; do
-            echo "Processing $file..."
-            echo "### File: $file" >> truncated_changes.txt
-            gh pr diff ${{ github.event.pull_request.number }} -- "$file" --unified=0 | head -c 2000 >> truncated_changes.txt
-            echo "" >> truncated_changes.txt
-          done < changed_files.txt
+          API_RESPONSE=$(curl -s -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${{ secrets.GEMINI_API_KEY }}" \
+             -H "Content-Type: application/json" \
+             -d '{
+             "contents": [{
+                 "parts": [{"text": "'"$(cat changed_files.txt)"'"}]
+             }]
+          }')
 
-          if [[ ! -s truncated_changes.txt ]]; then
-            echo "No significant changes detected." > comment.txt
-            exit 0
+          echo "AI API Response: $API_RESPONSE"
+
+          if [[ -z "$API_RESPONSE" || "$API_RESPONSE" == "null" ]]; then
+              echo "AI analysis failed." > comment.txt
+          else
+              echo "AI Code Review: $API_RESPONSE" > comment.txt
           fi
-
-      - name: Send PR Diff to AI API in Chunks
-        run: |
-          echo "### AI Code Review:" > comment.txt
-
-          split -b 512 truncated_changes.txt --additional-suffix=.chunk
-
-          for chunk in *.chunk; do
-            echo "Sending chunk to AI API..."
-            
-            # Properly format JSON input
-            JSON_INPUT=$(jq -Rs '.' < "$chunk")
-
-            API_RESPONSE=$(curl -s -X POST "https://api-inference.huggingface.co/models/microsoft/codebert-base" \
-                -H "Authorization: Bearer ${{ secrets.HUGGINGFACE_API_KEY }}" \
-                -H "Content-Type: application/json" \
-                -d "{\"inputs\": $JSON_INPUT}")
-
-            # Check if the response contains an error
-            if echo "$API_RESPONSE" | jq -e 'has("error")' >/dev/null; then
-                echo "⚠️ AI analysis failed for this chunk." >> comment.txt
-            else
-                echo "#### Review:" >> comment.txt
-                echo "$API_RESPONSE" | jq -r '.' >> comment.txt
-            fi
-          done
 
       - name: Post AI Review as PR Comment
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           COMMENT=$(cat comment.txt)
           gh pr comment ${{ github.event.pull_request.number }} --body "$COMMENT"
+
