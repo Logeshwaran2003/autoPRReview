@@ -1,86 +1,188 @@
-name: PR AI Code Review
+name: Gemini PR Review
 
 on:
   pull_request:
     types: [opened, synchronize]
 
-permissions:
-  contents: read
-  pull-requests: write  # 👈 Allows commenting on PRs
-
 jobs:
   review:
     runs-on: ubuntu-latest
-
+    permissions:
+      contents: read
+      pull-requests: write
+    
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
-
-      - name: Install GitHub CLI
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          
+      - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gh jq
-
-      - name: Fetch PR Details
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          python -m pip install --upgrade pip
+          pip install google-generativeai requests
+          
+      - name: Get file differences
+        id: file_changes
         run: |
-          PR_TITLE=$(gh pr view ${{ github.event.pull_request.number }} --json title -q .title)
-          PR_BODY=$(gh pr view ${{ github.event.pull_request.number }} --json body -q .body)
-          CHANGED_FILES=$(gh pr diff ${{ github.event.pull_request.number }} --name-only)
-
-          echo "PR_TITLE=$PR_TITLE" >> $GITHUB_ENV
-          echo "PR_BODY=$PR_BODY" >> $GITHUB_ENV
-          echo "$CHANGED_FILES" > changed_files.txt
-
-      - name: Prepare AI Review Prompt
-        run: |
-          echo "Generating AI review prompt..."
-
-          PROMPT=$(cat <<EOF
-          A new file was modified in a PR titled "${{ env.PR_TITLE }}".
-          PR description: ${{ env.PR_BODY }}
-
-          Please review the following changed files for correctness, optimizations, and best practices:
-
-          ```
-          $(cat changed_files.txt)
-          ```
-
-          Provide specific feedback on:
-          1. Code quality and design
-          2. Potential bugs or edge cases
-          3. Performance optimizations
-          4. Any security concerns
-          5. Overall approach and suggestions for improvement
-          EOF
-          )
-
-          echo "$PROMPT" > prompt.txt
-
-      - name: Get AI Review from Gemini 2.0
-        run: |
-          echo "Sending request to AI API..."
-
-          API_RESPONSE=$(curl -s -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${{ secrets.GEMINI_API_KEY }}" \
-             -H "Content-Type: application/json" \
-             -d '{
-             "contents": [{
-                 "parts": [{"text": "'"$(cat prompt.txt)"'"}]
-             }]
-          }' | jq -r '.candidates[0].content.parts[0].text')
-
-          echo "AI API Response: $API_RESPONSE"
-
-          if [[ -z "$API_RESPONSE" || "$API_RESPONSE" == "null" ]]; then
-              echo "AI analysis failed." > comment.txt
-          else
-              echo "### AI Code Review:\n\n$API_RESPONSE" > comment.txt
-          fi
-
-      - name: Post AI Review as PR Comment
+          BASE_SHA=${{ github.event.pull_request.base.sha }}
+          HEAD_SHA=${{ github.event.pull_request.head.sha }}
+          echo "Getting diff between $BASE_SHA and $HEAD_SHA"
+          git diff --name-only $BASE_SHA $HEAD_SHA > changed_files.txt
+          
+      - name: Generate and post reviews
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
         run: |
-          COMMENT=$(cat comment.txt)
-          gh pr comment ${{ github.event.pull_request.number }} --body "$COMMENT"
+          cat > review.py << 'EOF'
+          import os
+          import json
+          import requests
+          import google.generativeai as genai
+          
+          # Setup Gemini API
+          genai.configure(api_key=os.environ['GEMINI_API_KEY'])
+          model = genai.GenerativeModel('gemini-1.5-pro')
+          
+          # GitHub API setup
+          github_token = os.environ['GITHUB_TOKEN']
+          pr_number = os.environ['PR_NUMBER']
+          repo = os.environ['REPO']
+          github_api_url = f"https://api.github.com/repos/{repo}/pulls/{pr_number}/comments"
+          headers = {
+              "Authorization": f"Bearer {github_token}",
+              "Accept": "application/vnd.github.v3+json"
+          }
+          
+          # Get changed files
+          with open('changed_files.txt', 'r') as f:
+              changed_files = [line.strip() for line in f.readlines() if line.strip()]
+          
+          # For each changed file
+          for file_path in changed_files:
+              try:
+                  # Skip binary files, non-code files, etc.
+                  if not os.path.exists(file_path) or os.path.isdir(file_path):
+                      continue
+                      
+                  file_extension = os.path.splitext(file_path)[1].lower()
+                  if file_extension not in ['.py', '.js', '.jsx', '.ts', '.tsx', '.java', '.c', '.cpp', '.h', '.go', '.rb', '.php', '.html', '.css', '.yml', '.yaml', '.json', '.md', '.rs', '.swift']:
+                      continue
+                  
+                  # Get file diff
+                  diff_output = os.popen(f"git diff ${{{{ github.event.pull_request.base.sha }}}} ${{{{ github.event.pull_request.head.sha }}}} -- {file_path}").read()
+                  
+                  if not diff_output:
+                      continue
+                  
+                  # Get the file content
+                  with open(file_path, 'r', encoding='utf-8', errors='ignore') as file:
+                      try:
+                          file_content = file.read()
+                      except Exception as e:
+                          print(f"Error reading {file_path}: {e}")
+                          continue
+                  
+                  # Generate review with Gemini
+                  prompt = f"""
+                  You are an expert code reviewer. Please review the following code changes 
+                  and provide constructive feedback. Focus on:
+                  1. Potential bugs or issues
+                  2. Performance improvements
+                  3. Security concerns
+                  4. Code style and best practices
+                  
+                  For context, here is the full file content:
+                  ```
+                  {file_content}
+                  ```
+                  
+                  Here is the diff showing what changed:
+                  ```
+                  {diff_output}
+                  ```
+                  
+                  Provide a concise, specific, and constructive review. Focus only on the changes in the diff, not the entire file.
+                  Format your response as JSON with these fields:
+                  - overall_assessment: A brief summary of the changes
+                  - suggestions: Array of objects with line_number and comment fields
+                  
+                  Example:
+                  {{
+                      "overall_assessment": "Good implementation of feature X, but there are some concerns.",
+                      "suggestions": [
+                          {{
+                              "line_number": 42,
+                              "comment": "Consider using a more efficient algorithm here."
+                          }}
+                      ]
+                  }}
+                  """
+                  
+                  response = model.generate_content(prompt)
+                  review_text = response.text
+                  
+                  # Try to parse the response as JSON
+                  try:
+                      json_start = review_text.find('{')
+                      json_end = review_text.rfind('}') + 1
+                      if json_start >= 0 and json_end > json_start:
+                          json_str = review_text[json_start:json_end]
+                          review_data = json.loads(json_str)
+                          
+                          # Post overall assessment as a PR comment
+                          if "overall_assessment" in review_data:
+                              pr_comment_url = f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments"
+                              comment_data = {
+                                  "body": f"## Gemini Review for `{file_path}`\n\n{review_data['overall_assessment']}"
+                              }
+                              requests.post(pr_comment_url, headers=headers, json=comment_data)
+                          
+                          # Post line-specific comments
+                          if "suggestions" in review_data and len(review_data["suggestions"]) > 0:
+                              # Get the commit SHA to attach comments to
+                              commit_sha = os.environ['GITHUB_SHA']
+                              
+                              for suggestion in review_data["suggestions"]:
+                                  line_number = suggestion.get("line_number")
+                                  comment = suggestion.get("comment")
+                                  
+                                  if line_number and comment:
+                                      # Create a line comment
+                                      comment_data = {
+                                          "body": comment,
+                                          "commit_id": os.environ['GITHUB_SHA'],
+                                          "path": file_path,
+                                          "line": line_number,
+                                          "side": "RIGHT"  # Comment on the new version
+                                      }
+                                      requests.post(github_api_url, headers=headers, json=comment_data)
+                      else:
+                          # Fall back to posting the entire response as a comment
+                          comment_data = {
+                              "body": f"## Gemini Review for `{file_path}`\n\n{review_text}"
+                          }
+                          pr_comment_url = f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments"
+                          requests.post(pr_comment_url, headers=headers, json=comment_data)
+                              
+                  except json.JSONDecodeError:
+                      # If not valid JSON, post the raw text as a comment
+                      comment_data = {
+                          "body": f"## Gemini Review for `{file_path}`\n\n{review_text}"
+                      }
+                      pr_comment_url = f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments"
+                      requests.post(pr_comment_url, headers=headers, json=comment_data)
+                          
+              except Exception as e:
+                  print(f"Error processing {file_path}: {e}")
+          EOF
+          
+          python review.py
